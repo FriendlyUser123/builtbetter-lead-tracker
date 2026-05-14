@@ -1,0 +1,54 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Lead {
+  id           String       @id @default(cuid())
+  business     String
+  niche        String?
+  city         String?
+  website      String?
+  email        String?
+  phoneNumber  String?
+  issueFound   String?
+  priority     LeadPriority @default(MEDIUM)
+  contacted    Boolean      @default(false)
+  followUpDate DateTime?
+  googleMaps   String?
+  sourceLinks  String?
+  notes        String?
+  status       LeadStatus   @default(NEW)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+
+  @@index([business])
+  @@index([niche])
+  @@index([city])
+  @@index([status])
+  @@index([priority])
+  @@index([contacted])
+  @@index([followUpDate])
+}
+
+enum LeadStatus {
+  NEW
+  RESEARCHING
+  READY_TO_CONTACT
+  CONTACTED
+  FOLLOW_UP
+  REPLIED
+  INTERESTED
+  CLOSED
+  NOT_INTERESTED
+}
+
+enum LeadPriority {
+  HIGH
+  MEDIUM
+  LOW
+}
