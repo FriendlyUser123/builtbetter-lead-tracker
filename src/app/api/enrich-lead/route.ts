@@ -3,22 +3,29 @@ import { z } from "zod";
 import { enrichLeadFromSourceLinks } from "@/lib/enrichment";
 
 const requestSchema = z.object({
-  sourceLinks: z.string().min(1),
+  sourceLinks: z.string().optional().default(""),
+  rawResearchText: z.string().optional().default(""),
 });
 
 export async function POST(request: Request) {
   const body = await request.json().catch(() => null);
   const parsed = requestSchema.safeParse(body);
 
-  if (!parsed.success) {
+  if (
+    !parsed.success ||
+    (!parsed.data.sourceLinks.trim() && !parsed.data.rawResearchText.trim())
+  ) {
     return NextResponse.json(
-      { error: "Source links are required." },
+      { error: "Source links or raw research text are required." },
       { status: 400 },
     );
   }
 
   try {
-    const result = await enrichLeadFromSourceLinks(parsed.data.sourceLinks);
+    const result = await enrichLeadFromSourceLinks(
+      parsed.data.sourceLinks,
+      parsed.data.rawResearchText,
+    );
 
     return NextResponse.json(result);
   } catch {

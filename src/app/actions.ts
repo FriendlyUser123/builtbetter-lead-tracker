@@ -219,6 +219,7 @@ type ImportLeadRow = {
   followUpDate?: string;
   googleMaps?: string;
   sourceLinks?: string;
+  rawResearchText?: string;
   notes?: string;
   status?: string;
 };
@@ -322,6 +323,7 @@ export async function importLeadsAction(formData: FormData) {
         followUpDate: parseImportDate(row.followUpDate),
         googleMaps: optionalImportText(row.googleMaps),
         sourceLinks: optionalImportText(row.sourceLinks),
+        rawResearchText: optionalImportText(row.rawResearchText),
         notes: optionalImportText(row.notes),
         status: normalizeImportStatus(row.status),
       },

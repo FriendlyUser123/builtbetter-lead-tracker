@@ -29,6 +29,7 @@ export function readLeadFormData(formData: FormData) {
     followUpDate: String(formData.get("followUpDate") ?? ""),
     googleMaps: String(formData.get("googleMaps") ?? ""),
     sourceLinks: String(formData.get("sourceLinks") ?? ""),
+    rawResearchText: String(formData.get("rawResearchText") ?? ""),
     notes: String(formData.get("notes") ?? ""),
     status: String(formData.get("status") || "NEW"),
   });
@@ -46,6 +47,7 @@ export function readLeadFormData(formData: FormData) {
     followUpDate: parseOptionalDate(parsed.followUpDate),
     googleMaps: cleanOptional(parsed.googleMaps),
     sourceLinks: cleanOptional(parsed.sourceLinks),
+    rawResearchText: cleanOptional(parsed.rawResearchText),
     notes: cleanOptional(parsed.notes),
     status: parsed.status,
   };

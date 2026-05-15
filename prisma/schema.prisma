@@ -21,6 +21,7 @@ model Lead {
   followUpDate DateTime?
   googleMaps   String?
   sourceLinks  String?
+  rawResearchText String?
   notes        String?
   status       LeadStatus   @default(NEW)
   createdAt    DateTime     @default(now())

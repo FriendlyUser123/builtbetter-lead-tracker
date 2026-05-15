@@ -77,11 +77,15 @@ That deletes local data and reapplies migrations.
 On the Add Lead page:
 
 1. Paste one or more public URLs into Source Links.
-2. Click Autofill.
-3. Review the detected values and confidence notes.
-4. Edit anything before saving.
+2. Paste any copied bios, listing text, captions, or notes into Raw Research Text.
+3. Click Autofill.
+4. Optionally click Improve with AI if AI enrichment is enabled.
+5. Review the detected values, confidence notes, and AI suggestions.
+6. Edit anything before saving.
 
-Autofill uses public page data only:
+Autofill uses Source Links plus optional Raw Research Text. Raw Research Text is useful for pasted Instagram bios, Google Maps text, Yelp/Facebook details, captions, website copy, or manual research notes.
+
+Autofill uses public page data and pasted research text:
 
 - HTML title
 - Meta description
@@ -91,6 +95,7 @@ Autofill uses public page data only:
 - Public links
 - `mailto:` links
 - `tel:` links
+- Pasted phone numbers, emails, URLs, city mentions, and business descriptions
 
 It does not log in, bypass bot protections, scrape private data, or invent missing fields. If a phone, email, city, or website is not confidently found, it is left blank or marked as `not found`.
 
@@ -107,6 +112,30 @@ Some platforms limit public HTML heavily:
 
 The app prefers official business website data over third-party directory data.
 
+## Optional AI Enrichment
+
+AI enrichment is optional and disabled by default. The app still works with the normal local parser when AI is off.
+
+Add these environment variables to `.env` if you want to enable AI Review:
+
+```powershell
+AI_ENRICHMENT_ENABLED=true
+AI_API_KEY="your-api-key"
+AI_MODEL="your-model-name"
+```
+
+The `.env.example` file includes:
+
+```text
+AI_ENRICHMENT_ENABLED=false
+AI_API_KEY=""
+AI_MODEL=""
+```
+
+The current implementation uses `fetch` against an OpenAI-compatible chat completions endpoint, so no extra SDK package is required. AI Review receives the raw extractor evidence, platform detections, current autofill guesses, source links, and Raw Research Text. It returns structured suggestions for review; it never auto-saves.
+
+AI Review is instructed to avoid platform names such as Square, Instagram, Yelp, Facebook, DoorDash, GoDaddy, and Wix as business names, and to treat Square/booking links as booking tools rather than dedicated websites.
+
 ## CSV Export
 
 Use the Export button on the dashboard.
@@ -114,7 +143,7 @@ Use the Export button on the dashboard.
 Exported headers are Google Sheets-friendly:
 
 ```text
-Business,Niche,City,Website,Email,Phone Number,Issue Found,Priority,Contacted?,Follow-up Date,Google Maps?,Source Links,Notes,Status,Created At,Updated At
+Business,Niche,City,Website,Email,Phone Number,Issue Found,Priority,Contacted?,Follow-up Date,Google Maps?,Source Links,Raw Research Text,Notes,Status,Created At,Updated At
 ```
 
 Phone numbers export as text-safe values such as:
@@ -136,6 +165,7 @@ The importer accepts both readable headers and internal camelCase headers, inclu
 - `Follow-up Date` or `followUpDate`
 - `Google Maps?` or `googleMaps`
 - `Source Links` or `sourceLinks`
+- `Raw Research Text` or `rawResearchText`
 
 Rows preview before saving. Duplicates are skipped when an existing lead has the same business name plus phone number or website.
 

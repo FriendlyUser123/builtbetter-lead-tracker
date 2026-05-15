@@ -13,6 +13,7 @@ export type CsvLeadRow = {
   followUpDate?: string;
   googleMaps?: string;
   sourceLinks?: string;
+  rawResearchText?: string;
   notes?: string;
   status?: string;
 };

@@ -25,6 +25,21 @@ export type EnrichedField = {
   confidence: Confidence;
 };
 
+export type ExtractionEvidence = {
+  url: string;
+  platform: Platform;
+  title: string | null;
+  description: string | null;
+  headings: string[];
+  detectedBusiness: string | null;
+  detectedNiche: string | null;
+  detectedCity: string | null;
+  detectedWebsite: string | null;
+  detectedEmail: string | null;
+  detectedPhoneNumber: string | null;
+  textSnippet: string;
+};
+
 export type EnrichmentResult = {
   fields: Partial<
     Record<
@@ -42,6 +57,8 @@ export type EnrichmentResult = {
   >;
   platforms: Array<{ platform: Platform; url: string }>;
   warnings: string[];
+  businessNameCandidates: string[];
+  evidence: ExtractionEvidence[];
 };
 
 type PageExtraction = {
@@ -86,6 +103,46 @@ const confidenceRank: Record<Confidence, number> = {
   medium: 2,
   low: 1,
 };
+
+const commonPersonalNames = new Set([
+  "ronnie",
+  "john",
+  "mike",
+  "michael",
+  "david",
+  "chris",
+  "james",
+  "robert",
+  "william",
+  "mark",
+  "sarah",
+  "jessica",
+  "ashley",
+  "amanda",
+]);
+
+const businessWords = [
+  "detailing",
+  "detail",
+  "floors",
+  "flooring",
+  "barber",
+  "barbershop",
+  "salon",
+  "lashes",
+  "nails",
+  "bakery",
+  "cafe",
+  "restaurant",
+  "grill",
+  "auto",
+  "spa",
+  "services",
+  "studio",
+  "company",
+  "co",
+  "llc",
+];
 
 function detectPlatform(url: string): Platform {
   const host = hostnameFor(url);
@@ -259,6 +316,50 @@ function cleanInstagramBusinessName(title: string) {
   return cleaned;
 }
 
+function titleCaseWords(value: string) {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((word) => {
+      if (word.toLowerCase() === "dr") return "Dr.";
+      return word.charAt(0).toUpperCase() + word.slice(1).toLowerCase();
+    })
+    .join(" ");
+}
+
+function usernameToBusinessCandidates(urlOrText: string) {
+  const match =
+    urlOrText.match(/instagram\.com\/([^/?#\s]+)/i) ||
+    urlOrText.match(/@([a-z0-9._]+)/i);
+  const username = match?.[1]?.replace(/[._-]+/g, " ").replace(/\d+/g, "").trim();
+
+  if (!username) return [];
+
+  const candidates = new Set<string>();
+  const expanded = username
+    .replace(/\bdr\b/i, "Doctor")
+    .replace(/\bdoc\b/i, "Doctor");
+  candidates.add(titleCaseWords(expanded));
+
+  if (/\bdoctor\b/i.test(expanded)) {
+    candidates.add(titleCaseWords(expanded.replace(/\bdoctor\b/i, "Dr.")));
+  }
+
+  return Array.from(candidates);
+}
+
+function looksLikePersonalName(value: string | null | undefined) {
+  const cleaned = value?.trim().toLowerCase();
+  if (!cleaned) return false;
+
+  return commonPersonalNames.has(cleaned) || /^[a-z]+$/.test(cleaned);
+}
+
+function looksBusinessLike(value: string | null | undefined) {
+  const cleaned = value?.toLowerCase() ?? "";
+  return businessWords.some((word) => cleaned.includes(word));
+}
+
 function inferNicheFromText(...values: Array<string | null | undefined>) {
   const text = values
     .filter(Boolean)
@@ -270,7 +371,16 @@ function inferNicheFromText(...values: Array<string | null | undefined>) {
     { niche: "Barbershop", terms: ["barber", "cuts", "haircut", "hair cuts"] },
     {
       niche: "Auto detailing",
-      terms: ["detail", "detailing", "auto spa", "car wash", "ceramic coating"],
+      terms: [
+        "detail",
+        "detailing",
+        "auto spa",
+        "car wash",
+        "ceramic coating",
+        "paint correction",
+        "exterior",
+        "interior",
+      ],
     },
     { niche: "Bakery", terms: ["bakery", "bakes", "cakes", "cupcakes"] },
     {
@@ -284,6 +394,55 @@ function inferNicheFromText(...values: Array<string | null | undefined>) {
   ];
 
   return rules.find((rule) => rule.terms.some((term) => text.includes(term)))?.niche ?? null;
+}
+
+function findCityFromText(text: string) {
+  const cityRules = [
+    { city: "Richmond, VA", terms: ["richmond, va", "richmond va", "richmond"] },
+    { city: "Henrico, VA", terms: ["henrico, va", "henrico va", "henrico"] },
+    { city: "Glen Allen, VA", terms: ["glen allen, va", "glen allen va", "glen allen"] },
+    { city: "Midlothian, VA", terms: ["midlothian, va", "midlo va", "midlothian"] },
+  ];
+  const lower = text.toLowerCase();
+
+  return cityRules.find((rule) => rule.terms.some((term) => lower.includes(term)))
+    ?.city ?? null;
+}
+
+function findEmailInText(text: string) {
+  return text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i)?.[0] ?? null;
+}
+
+function findPhoneInText(text: string) {
+  return (
+    text.match(/(?:\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/)?.[0] ??
+    null
+  );
+}
+
+function findUrlsInText(text: string) {
+  return Array.from(
+    new Set(
+      Array.from(text.matchAll(/(?:https?:\/\/)?(?:www\.)?[a-z0-9.-]+\.[a-z]{2,}(?:\/[^\s)]*)?/gi))
+        .map((match) => normalizeExternalUrl(match[0]))
+        .filter((url): url is string => Boolean(url))
+        .filter(isLikelyPublicHttpUrl),
+    ),
+  );
+}
+
+function isBookingLink(url: string) {
+  const host = hostnameFor(url);
+  return [
+    "squareup.com",
+    "square.site",
+    "linktr.ee",
+    "linktree.com",
+    "calendly.com",
+    "glossgenius.com",
+    "booksy.com",
+    "acuityscheduling.com",
+  ].some((domain) => host.includes(domain));
 }
 
 function typeFromJsonLd(jsonLd: unknown[]) {
@@ -564,6 +723,16 @@ function field(value: string | null, sourceUrl: string, confidence: Confidence) 
 }
 
 function suggestIssueAndPriority(pages: PageExtraction[], platforms: Platform[]) {
+  if (pages.length === 0) {
+    return {
+      issue:
+        "Lead has some manual research notes, but no dedicated website was confirmed from the provided sources.",
+      priority: "MEDIUM",
+      confidence: "low" as Confidence,
+      sourceUrl: "Raw Research Text",
+    };
+  }
+
   const isInstagramOnly =
     platforms.length > 0 && platforms.every((platform) => platform === "Instagram");
   const foundDedicatedWebsite = pages.some((page) => {
@@ -677,27 +846,39 @@ function suggestIssueAndPriority(pages: PageExtraction[], platforms: Platform[])
 
 export async function enrichLeadFromSourceLinks(
   sourceLinks: string,
+  rawResearchText = "",
 ): Promise<EnrichmentResult> {
-  const urls = extractUrls(sourceLinks);
+  const urls = Array.from(
+    new Set([...extractUrls(sourceLinks), ...findUrlsInText(rawResearchText)]),
+  ).slice(0, 8);
+  const rawText = rawResearchText.trim();
   const result: EnrichmentResult = {
     fields: {},
     platforms: urls.map((url) => ({ platform: detectPlatform(url), url })),
     warnings: [],
+    businessNameCandidates: [],
+    evidence: [],
   };
 
-  if (urls.length === 0) {
-    result.warnings.push("No valid public URLs were found in Source Links.");
-    return result;
-  }
+  const rawTextBusinessCandidates = [
+    ...usernameToBusinessCandidates(`${sourceLinks} ${rawText}`),
+    ...Array.from(
+      rawText.matchAll(/\b(?:business|name|company)\s*:\s*([^\n]+)/gi),
+    ).map((match) => textOrNull(match[1]) ?? ""),
+  ].filter(Boolean);
 
-  const pages = (await Promise.all(urls.map(fetchPublicPage))).filter(
-    (page): page is PageExtraction => Boolean(page),
-  );
+  let pages: PageExtraction[] = [];
+
+  if (urls.length > 0) {
+    pages = (await Promise.all(urls.map(fetchPublicPage))).filter(
+      (page): page is PageExtraction => Boolean(page),
+    );
+  }
   const isInstagramOnly =
     result.platforms.length > 0 &&
     result.platforms.every((item) => item.platform === "Instagram");
 
-  if (pages.length === 0) {
+  if (pages.length === 0 && !rawText) {
     result.warnings.push(
       "No public HTML pages could be read from those links. The page may block automated public reads or require JavaScript/login.",
     );
@@ -710,6 +891,21 @@ export async function enrichLeadFromSourceLinks(
   const preferredPages = officialPage
     ? [officialPage, ...pages.filter((page) => page.url !== officialPage.url)]
     : pages;
+
+  result.evidence = pages.map((page) => ({
+    url: page.url,
+    platform: page.platform,
+    title: page.title,
+    description: page.description,
+    headings: page.headings,
+    detectedBusiness: page.business,
+    detectedNiche: page.niche,
+    detectedCity: page.city,
+    detectedWebsite: page.website,
+    detectedEmail: page.email,
+    detectedPhoneNumber: page.phoneNumber,
+    textSnippet: page.text.slice(0, 1800),
+  }));
 
   for (const page of preferredPages) {
     const directPageConfidence: Confidence =
@@ -725,6 +921,74 @@ export async function enrichLeadFromSourceLinks(
       addCandidate(result, "googleMaps", field(page.url, page.url, "high"));
     }
   }
+
+  const allBusinessCandidates = new Set<string>();
+  for (const candidate of rawTextBusinessCandidates) {
+    allBusinessCandidates.add(candidate);
+  }
+  for (const page of pages) {
+    if (page.business) allBusinessCandidates.add(page.business);
+    for (const candidate of usernameToBusinessCandidates(page.url)) {
+      allBusinessCandidates.add(candidate);
+    }
+  }
+
+  result.businessNameCandidates = Array.from(allBusinessCandidates)
+    .map((candidate) => candidate.trim())
+    .filter(Boolean)
+    .filter((candidate, index, candidates) => candidates.indexOf(candidate) === index)
+    .slice(0, 6);
+
+  const bestBusinessCandidate =
+    result.businessNameCandidates.find(looksBusinessLike) ??
+    result.businessNameCandidates.find((candidate) => !looksLikePersonalName(candidate)) ??
+    null;
+
+  const currentBusiness = result.fields.business?.value;
+  if (
+    bestBusinessCandidate &&
+    (!currentBusiness ||
+      (isInstagramOnly && looksLikePersonalName(currentBusiness) && looksBusinessLike(bestBusinessCandidate)))
+  ) {
+    addCandidate(
+      result,
+      "business",
+      field(bestBusinessCandidate, urls[0] ?? "Raw Research Text", "medium"),
+    );
+  }
+
+  addCandidate(
+    result,
+    "niche",
+    field(
+      inferNicheFromText(rawText, sourceLinks, bestBusinessCandidate),
+      "Raw Research Text",
+      "medium",
+    ),
+  );
+  addCandidate(result, "city", field(findCityFromText(rawText), "Raw Research Text", "medium"));
+  addCandidate(result, "email", field(findEmailInText(rawText), "Raw Research Text", "high"));
+  addCandidate(
+    result,
+    "phoneNumber",
+    field(findPhoneInText(rawText), "Raw Research Text", "high"),
+  );
+
+  const rawUrls = findUrlsInText(rawText);
+  const googleMapsUrl = rawUrls.find((url) => detectPlatform(url) === "Google Maps");
+  const websiteUrl = rawUrls.find((url) => {
+    const platform = detectPlatform(url);
+    return (
+      platform === "Business Website" ||
+      platform === "Square" ||
+      platform === "Wix" ||
+      platform === "GoDaddy"
+    );
+  });
+  const bookingLink = rawUrls.find(isBookingLink);
+
+  addCandidate(result, "googleMaps", field(googleMapsUrl ?? null, "Raw Research Text", "high"));
+  addCandidate(result, "website", field(websiteUrl ?? null, "Raw Research Text", "medium"));
 
   const foundDedicatedWebsite = pages.some((page) => {
     if (!page.website || page.website === "not found") return false;
@@ -744,15 +1008,28 @@ export async function enrichLeadFromSourceLinks(
 
   const platforms = result.platforms.map((item) => item.platform);
   const suggestion = suggestIssueAndPriority(pages, platforms);
+  const hasBookingLink = Boolean(bookingLink);
+  const noDedicatedWebsite =
+    !result.fields.website?.value || result.fields.website.value === "not found";
+  const issueSuggestion =
+    hasBookingLink && noDedicatedWebsite
+      ? {
+          issue:
+            "No dedicated website found; business appears to rely mainly on Instagram and a booking link, which limits control over branding, services, and customer contact flow.",
+          priority: "HIGH",
+          confidence: "high" as Confidence,
+          sourceUrl: bookingLink ?? urls[0] ?? "Raw Research Text",
+        }
+      : suggestion;
   addCandidate(
     result,
     "issueFound",
-    field(suggestion.issue, suggestion.sourceUrl, suggestion.confidence),
+    field(issueSuggestion.issue, issueSuggestion.sourceUrl, issueSuggestion.confidence),
   );
   addCandidate(
     result,
     "priority",
-    field(suggestion.priority, suggestion.sourceUrl, suggestion.confidence),
+    field(issueSuggestion.priority, issueSuggestion.sourceUrl, issueSuggestion.confidence),
   );
 
   for (const [key, value] of Object.entries(result.fields)) {

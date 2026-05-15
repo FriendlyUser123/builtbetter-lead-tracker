@@ -50,6 +50,7 @@ export const leadSchema = z.object({
   followUpDate: optionalText,
   googleMaps: optionalText,
   sourceLinks: optionalText,
+  rawResearchText: optionalText,
   notes: optionalText,
   status: z.enum(leadStatusValues),
 });

@@ -5,6 +5,11 @@ import { format } from "date-fns";
 import { Sparkles } from "lucide-react";
 import type { ReactNode } from "react";
 import { useMemo, useState } from "react";
+import {
+  aiSuggestionLabels,
+  normalizeAiPriority,
+  type AiLeadSuggestions,
+} from "@/lib/ai-enrichment";
 import type { EnrichedField, EnrichmentResult } from "@/lib/enrichment";
 import {
   leadPriorityLabels,
@@ -27,6 +32,7 @@ type LeadFormValues = {
   followUpDate?: Date | null;
   googleMaps?: string | null;
   sourceLinks?: string | null;
+  rawResearchText?: string | null;
   notes?: string | null;
   status?: (typeof leadStatusValues)[number];
 };
@@ -56,6 +62,7 @@ type FormValues = {
   followUpDate: string;
   googleMaps: string;
   sourceLinks: string;
+  rawResearchText: string;
   notes: string;
   status: (typeof leadStatusValues)[number];
 };
@@ -73,6 +80,7 @@ const emptyValues: FormValues = {
   followUpDate: "",
   googleMaps: "",
   sourceLinks: "",
+  rawResearchText: "",
   notes: "",
   status: "NEW",
 };
@@ -87,6 +95,7 @@ const fieldLabels: Record<string, string> = {
   issueFound: "Issue Found",
   priority: "Priority",
   googleMaps: "Google Maps",
+  rawResearchText: "Raw Research Text",
 };
 
 function confidenceClass(confidence: string) {
@@ -191,6 +200,7 @@ export function LeadForm({
       followUpDate: dateInputValue(lead?.followUpDate),
       googleMaps: lead?.googleMaps ?? "",
       sourceLinks: lead?.sourceLinks ?? "",
+      rawResearchText: lead?.rawResearchText ?? "",
       notes: lead?.notes ?? "",
       status: lead?.status ?? "NEW",
     }),
@@ -198,8 +208,12 @@ export function LeadForm({
   );
   const [values, setValues] = useState<FormValues>(initialValues);
   const [enrichment, setEnrichment] = useState<EnrichmentResult | null>(null);
+  const [aiSuggestions, setAiSuggestions] = useState<AiLeadSuggestions | null>(null);
   const [autofillError, setAutofillError] = useState<string | null>(null);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const [aiDebug, setAiDebug] = useState<Record<string, unknown> | null>(null);
   const [isAutofilling, setIsAutofilling] = useState(false);
+  const [isAiReviewing, setIsAiReviewing] = useState(false);
 
   function updateField(name: keyof FormValues, value: string) {
     setValues((current) => ({ ...current, [name]: value }));
@@ -242,8 +256,10 @@ export function LeadForm({
   function autofillLead() {
     setAutofillError(null);
 
-    if (!values.sourceLinks.trim()) {
-      setAutofillError("Paste one or more public links into Source Links first.");
+    if (!values.sourceLinks.trim() && !values.rawResearchText.trim()) {
+      setAutofillError(
+        "Paste public links or raw research text before using Autofill.",
+      );
       return;
     }
 
@@ -256,7 +272,10 @@ export function LeadForm({
           headers: {
             "content-type": "application/json",
           },
-          body: JSON.stringify({ sourceLinks: values.sourceLinks }),
+          body: JSON.stringify({
+            sourceLinks: values.sourceLinks,
+            rawResearchText: values.rawResearchText,
+          }),
         });
 
         if (!response.ok) {
@@ -265,6 +284,9 @@ export function LeadForm({
 
         const result = (await response.json()) as EnrichmentResult;
         setEnrichment(result);
+        setAiSuggestions(null);
+        setAiError(null);
+        setAiDebug(null);
         applyEnrichment(result);
       } catch {
         setAutofillError(
@@ -276,10 +298,100 @@ export function LeadForm({
     })();
   }
 
+  function applyAiSuggestion(fieldName: keyof Omit<AiLeadSuggestions, "warnings">) {
+    const suggestion = aiSuggestions?.[fieldName];
+    const value = suggestion?.value.trim();
+
+    if (!value) return;
+
+    if (fieldName === "priority") {
+      setValues((current) => ({
+        ...current,
+        priority: normalizeAiPriority(value) as FormValues["priority"],
+      }));
+      return;
+    }
+
+    setValues((current) => ({
+      ...current,
+      [fieldName]: value,
+    }));
+  }
+
+  function applyAllAiSuggestions() {
+    if (!aiSuggestions) return;
+
+    (
+      Object.keys(aiSuggestionLabels) as Array<keyof Omit<AiLeadSuggestions, "warnings">>
+    ).forEach(applyAiSuggestion);
+  }
+
+  function improveWithAi() {
+    setAiError(null);
+
+    if (!enrichment) {
+      setAiError("Run Autofill first, then use AI Review to clean up the results.");
+      return;
+    }
+
+    setIsAiReviewing(true);
+
+    void (async () => {
+      try {
+        const response = await fetch("/api/enrich-lead/ai", {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+          },
+          body: JSON.stringify({
+            sourceLinks: values.sourceLinks,
+            rawResearchText: values.rawResearchText,
+            extraction: enrichment,
+            currentValues: values,
+          }),
+        });
+
+        if (!response.ok) {
+          throw new Error("AI Review failed.");
+        }
+
+        const payload = (await response.json()) as {
+          enabled: boolean;
+          message?: string;
+          suggestions: AiLeadSuggestions | null;
+          debug?: Record<string, unknown>;
+        };
+
+        setAiDebug(payload.debug ?? null);
+
+        if (!payload.enabled || !payload.suggestions) {
+          setAiError(
+            payload.message ||
+              "AI enrichment is disabled. Existing autofill results are still available.",
+          );
+          return;
+        }
+
+        setAiSuggestions(payload.suggestions);
+        setAiError(null);
+      } catch {
+        setAiError(
+          "AI Review could not complete. Existing autofill results are still available.",
+        );
+        setAiDebug(null);
+      } finally {
+        setIsAiReviewing(false);
+      }
+    })();
+  }
+
   function clearForm() {
     setValues(emptyValues);
     setEnrichment(null);
+    setAiSuggestions(null);
     setAutofillError(null);
+    setAiError(null);
+    setAiDebug(null);
   }
 
   const enrichmentEntries = enrichment
@@ -402,6 +514,15 @@ export function LeadForm({
       </section>
 
       <section className="grid gap-4 rounded-lg border border-slate-800 bg-slate-950 p-5">
+        <div>
+          <p className="text-sm font-medium uppercase tracking-[0.18em] text-cyan-300">
+            Research Sources
+          </p>
+          <p className="mt-2 text-sm text-slate-400">
+            Paste Instagram bios, Google Maps text, website text, or notes here
+            to improve autofill accuracy.
+          </p>
+        </div>
         <TextArea
           label="Issue Found"
           name="issueFound"
@@ -418,17 +539,36 @@ export function LeadForm({
           placeholder="Public URLs, Google Maps listing, directory pages, notes from manual research..."
           actionSlot={
             enableAutofill ? (
-              <button
-                type="button"
-                onClick={autofillLead}
-                disabled={isAutofilling}
-                className="inline-flex h-8 items-center gap-2 rounded-md border border-cyan-500/40 px-3 text-xs font-semibold text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-300/10 disabled:cursor-wait disabled:opacity-60"
-              >
-                <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                {isAutofilling ? "Autofilling..." : "Autofill"}
-              </button>
+              <span className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={autofillLead}
+                  disabled={isAutofilling}
+                  className="inline-flex h-8 items-center gap-2 rounded-md border border-cyan-500/40 px-3 text-xs font-semibold text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-300/10 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  {isAutofilling ? "Autofilling..." : "Autofill"}
+                </button>
+                <button
+                  type="button"
+                  onClick={improveWithAi}
+                  disabled={isAiReviewing}
+                  className="inline-flex h-8 items-center gap-2 rounded-md border border-violet-500/40 px-3 text-xs font-semibold text-violet-100 transition hover:border-violet-300 hover:bg-violet-300/10 disabled:cursor-wait disabled:opacity-60"
+                >
+                  <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                  {isAiReviewing ? "Reviewing..." : "Improve with AI"}
+                </button>
+              </span>
             ) : null
           }
+        />
+        <TextArea
+          label="Raw Research Text"
+          name="rawResearchText"
+          rows={7}
+          value={values.rawResearchText}
+          onChange={updateField}
+          placeholder="Paste Instagram bio text, Google Maps listing text, Yelp/Facebook details, captions, website copy, or manual notes..."
         />
         <TextArea
           label="Notes"
@@ -443,6 +583,24 @@ export function LeadForm({
         <p className="rounded-md border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-100">
           {autofillError}
         </p>
+      ) : null}
+
+      {aiError ? (
+        <div className="rounded-md border border-violet-500/30 bg-violet-500/10 px-4 py-3 text-sm text-violet-100">
+          <p>{aiError}</p>
+          {aiDebug ? (
+            <dl className="mt-3 grid gap-2 text-xs text-violet-100/80 sm:grid-cols-2">
+              {Object.entries(aiDebug).map(([key, value]) => (
+                <div key={key} className="rounded border border-violet-500/20 p-2">
+                  <dt className="font-semibold">{key}</dt>
+                  <dd className="mt-1 break-words">
+                    {typeof value === "boolean" ? String(value) : String(value ?? "")}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          ) : null}
+        </div>
       ) : null}
 
       {enrichment ? (
@@ -504,6 +662,109 @@ export function LeadForm({
                   <li key={warning}>{warning}</li>
                 ))}
               </ul>
+            </div>
+          ) : null}
+
+          {enrichment.businessNameCandidates?.length ? (
+            <div className="mt-4 rounded-md border border-cyan-500/30 bg-cyan-500/10 p-3">
+              <p className="text-sm font-medium text-cyan-100">
+                Possible business names
+              </p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {enrichment.businessNameCandidates.map((candidate) => (
+                  <button
+                    key={candidate}
+                    type="button"
+                    onClick={() => updateField("business", candidate)}
+                    className="rounded-md border border-cyan-500/40 px-3 py-1.5 text-sm font-semibold text-cyan-100 transition hover:border-cyan-300 hover:bg-cyan-300/10"
+                  >
+                    {candidate}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
+
+          {aiSuggestions ? (
+            <div className="mt-4 rounded-md border border-violet-500/30 bg-violet-500/10 p-4">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold text-violet-100">
+                    AI Review Suggestions
+                  </p>
+                  <p className="mt-1 text-sm text-violet-100/75">
+                    Review these before saving. Apply one field or all fields, then
+                    edit anything you want.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={applyAllAiSuggestions}
+                  className="h-9 rounded-md bg-violet-300 px-4 text-sm font-semibold text-slate-950 transition hover:bg-violet-200"
+                >
+                  Apply all suggestions
+                </button>
+              </div>
+
+              <div className="mt-4 grid gap-3 md:grid-cols-2">
+                {(
+                  Object.keys(aiSuggestionLabels) as Array<
+                    keyof Omit<AiLeadSuggestions, "warnings">
+                  >
+                ).map((fieldName) => {
+                  const suggestion = aiSuggestions[fieldName];
+
+                  return (
+                    <div
+                      key={fieldName}
+                      className="rounded-md border border-violet-500/20 bg-slate-950/80 p-3"
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <p className="text-sm font-medium text-slate-100">
+                          {aiSuggestionLabels[fieldName]}
+                        </p>
+                        <span
+                          className={`rounded-full border px-2 py-0.5 text-xs font-medium ${confidenceClass(
+                            suggestion.confidence,
+                          )}`}
+                        >
+                          {suggestion.confidence}
+                        </span>
+                      </div>
+                      <p className="mt-2 break-words text-sm text-slate-300">
+                        {suggestion.value || "not found"}
+                      </p>
+                      {suggestion.reason ? (
+                        <p className="mt-2 text-xs leading-5 text-slate-500">
+                          {suggestion.reason}
+                        </p>
+                      ) : null}
+                      {suggestion.value ? (
+                        <button
+                          type="button"
+                          onClick={() => applyAiSuggestion(fieldName)}
+                          className="mt-3 h-8 rounded-md border border-violet-500/40 px-3 text-xs font-semibold text-violet-100 transition hover:border-violet-300 hover:bg-violet-300/10"
+                        >
+                          Apply
+                        </button>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {aiSuggestions.warnings.length ? (
+                <div className="mt-4 rounded-md border border-amber-500/30 bg-amber-500/10 p-3">
+                  <p className="text-sm font-medium text-amber-100">
+                    AI Review warnings
+                  </p>
+                  <ul className="mt-2 space-y-1 text-sm text-amber-100/80">
+                    {aiSuggestions.warnings.map((warning) => (
+                      <li key={warning}>{warning}</li>
+                    ))}
+                  </ul>
+                </div>
+              ) : null}
             </div>
           ) : null}
         </section>
