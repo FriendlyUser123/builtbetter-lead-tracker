@@ -9,7 +9,9 @@
 /build
 
 # local env
-.env*.local
+.env
+.env.*
+!.env.example
 
 # SQLite databases
 /prisma/*.db
@@ -30,3 +32,4 @@ pnpm-debug.log*
 # OS
 .DS_Store
 Thumbs.db
+tsconfig.tsbuildinfo
